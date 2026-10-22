@@ -547,6 +547,15 @@ constructor(
                 } else {
                     results.resultOrNull(tabs)?.let {
                         mail.replaceInboxTabs(accountKey, it.list, it.state)
+
+                        // Behind the refresh rather than in it: on a first run this
+                        // runs in front of the first page, and a tab nobody has
+                        // opened yet is not worth delaying the inbox for.
+                        scope.launch {
+                            runCatching {
+                                seedEmptyTabs(database, mail, client, accountKey, accountId)
+                            }
+                        }
                     }
                 }
             }

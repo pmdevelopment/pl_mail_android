@@ -83,6 +83,9 @@ class CategoryDigest @Inject constructor(private val database: PlMailDatabase) {
      * Which tab a conversation holds is [tabKeyOf]'s answer — the reader's own tab where they filed
      * it, Primary for a category they switched off — so a tab is populated on the phone exactly
      * when it is on the web.
+     *
+     * That holds only while the cache has the mail to count, and a tab nobody has opened would not
+     * have it; [seedEmptyTabs] is what puts one conversation of each such tab here.
      */
     val populated: Flow<Set<String>> =
         combine(database.threads().observeTabPlacements(), tabRows) { rows, tabs ->

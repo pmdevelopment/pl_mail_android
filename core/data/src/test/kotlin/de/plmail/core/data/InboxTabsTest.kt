@@ -7,6 +7,7 @@ import de.plmail.core.database.StoreKey
 import de.plmail.jmap.client.HttpResponse
 import de.plmail.jmap.testing.RecordingTransport
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -360,6 +361,125 @@ class InboxTabsTest {
 
         applier.apply(mapOf(TEST_ACCOUNT_ID to mapOf("Email" to "s5", "InboxTab" to "t2")))
         assertEquals(listOf(testAccountKey), refreshed)
+    }
+
+    // -- Tabs the cache holds nothing of (#52) ------------------------------
+
+    /**
+     * A tab whose mail was all filed before this device looked is asked for its newest
+     * conversation, and the sidebar then draws it. Primary, switched-off tabs and tabs the cache
+     * already holds mail in are not asked.
+     */
+    @Test
+    fun `a tab the cache holds nothing of is fetched so the sidebar draws it`() = runTest {
+        database.seedAccount()
+        database.seedInbox()
+        database.seedTabs(
+            own = listOf("c12" to "Shipping"),
+            switchedOff = setOf(MailCategory.SOCIAL, MailCategory.UPDATES, MailCategory.FORUMS),
+        )
+        database.seedThread(
+            "t1",
+            category = MailCategory.PROMOTIONS.wire,
+            inboxTab = MailCategory.PROMOTIONS.wire,
+            isInInbox = true,
+        )
+
+        assertEquals(false, "c12" in CategoryDigest(database).populated.first())
+
+        val transport =
+            serving(
+                session = TABBED_SESSION,
+                api =
+                    """
+                    {"sessionState":"s","methodResponses":[
+                      ["Email/query",{"accountId":"$TEST_ACCOUNT_ID","queryState":"q",
+                        "ids":["m9"]},"c0"],
+                      ["Email/get",{"accountId":"$TEST_ACCOUNT_ID","state":"e7","list":[
+                        {"id":"m9","threadId":"t9","receivedAt":"2026-07-01T10:00:00Z",
+                         "mailboxIds":{"$INBOX_MAILBOX_ID":true},"preview":"Your parcel"}
+                      ],"notFound":[]},"c1"],
+                      ["Thread/get",{"accountId":"$TEST_ACCOUNT_ID","state":"t","list":[
+                        {"id":"t9","emailIds":["m9"],"category":"promotions","inboxTab":"c12"}
+                      ],"notFound":[]},"c2"]]}
+                    """,
+            )
+
+        seedEmptyTabs(
+            database,
+            MailRepository(database),
+            testClients(transport).forAccount(testAccountKey)!!,
+            testAccountKey,
+            de.plmail.jmap.protocol.AccountId(TEST_ACCOUNT_ID),
+        )
+
+        val body =
+            transport.requests.single { it.url.endsWith("/jmap/api") }.body!!.decodeToString()
+        assertTrue(body.contains("\"threadInboxTab\":\"c12\""), body)
+        assertFalse(body.contains("\"threadInboxTab\":\"promotions\""), body)
+        assertFalse(body.contains("\"threadInboxTab\":\"primary\""), body)
+        assertFalse(body.contains("\"threadInboxTab\":\"forums\""), body)
+
+        val stored = database.threads().byUid(uid("t9"))
+        assertEquals("c12", stored?.inboxTab)
+        assertEquals(true, stored?.isInInbox)
+        assertTrue("c12" in CategoryDigest(database).populated.first())
+    }
+
+    /** Every tab already holds mail on the device: nothing to ask, and nothing is asked. */
+    @Test
+    fun `nothing is asked when the cache holds mail in every tab`() = runTest {
+        database.seedAccount()
+        database.seedInbox()
+        database.seedTabs(
+            own = listOf("c12" to "Shipping"),
+            switchedOff = setOf(MailCategory.SOCIAL, MailCategory.UPDATES, MailCategory.FORUMS),
+        )
+        database.seedThread(
+            "t1",
+            category = MailCategory.PROMOTIONS.wire,
+            inboxTab = MailCategory.PROMOTIONS.wire,
+            isInInbox = true,
+        )
+        database.seedThread(
+            "t2",
+            category = MailCategory.PROMOTIONS.wire,
+            inboxTab = "c12",
+            isInInbox = true,
+        )
+
+        val transport = serving(session = TABBED_SESSION, api = "unused")
+
+        seedEmptyTabs(
+            database,
+            MailRepository(database),
+            testClients(transport).forAccount(testAccountKey)!!,
+            testAccountKey,
+            de.plmail.jmap.protocol.AccountId(TEST_ACCOUNT_ID),
+        )
+
+        assertEquals(0, transport.requests.count { it.url.endsWith("/jmap/api") })
+    }
+
+    /** Where the reader keeps one list no tab is drawn, so no tab is worth a request. */
+    @Test
+    fun `nothing is asked on one list`() = runTest {
+        database.seedAccount()
+        database.seedInbox()
+        database.seedTabs(own = listOf("c12" to "Shipping"))
+        oneList()
+
+        val transport = serving(session = TABBED_SESSION, api = "unused")
+
+        seedEmptyTabs(
+            database,
+            MailRepository(database),
+            testClients(transport).forAccount(testAccountKey)!!,
+            testAccountKey,
+            de.plmail.jmap.protocol.AccountId(TEST_ACCOUNT_ID),
+        )
+
+        assertEquals(0, transport.requests.count { it.url.endsWith("/jmap/api") })
     }
 
     // -- fixtures ------------------------------------------------------------

@@ -258,6 +258,11 @@ constructor(
         val result = client.send(request).result(handle)
 
         mail.replaceInboxTabs(accountKey, result.list, result.state)
+
+        // A tab made or switched back on is a tab this cache has never held
+        // anything of, and the mail a re-sort just filed into it is mail it was
+        // never sent. Without this it would stay hidden until new mail arrived.
+        runCatching { seedEmptyTabs(database, mail, client, accountKey, accountId) }
     }
 
     private fun List<InboxTabEntity>.toStrip(): List<MailTab> = filter {
